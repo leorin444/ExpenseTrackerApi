@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using ExpenseTracker.API.DTOs;
 
 public class ExpenseRepository
@@ -17,11 +17,22 @@ public class ExpenseRepository
 
         foreach (var e in clientExpenses)
         {
-            if (e.ServerId.HasValue)
+            if (e.ServerId.HasValue && e.ServerId.Value > 0)
             {
                 // existing server record
-                var server = await db.QueryFirstOrDefaultAsync<ExpenseSyncDto>(
-                    "SELECT * FROM Expenses WHERE Id=@Id AND UserId=@UserId",
+                var server = await db.QueryFirstOrDefaultAsync<ExpenseSyncDto>(@"
+                    SELECT 
+                        Id AS ServerId, 
+                        ISNULL(ClientExpenseId, ClientId) AS ClientExpenseId, 
+                        CategoryId, 
+                        Amount, 
+                        Note AS Description, 
+                        ExpenseDate, 
+                        ImageBase64 AS ReceiptImageBase64, 
+                        UpdatedAt AS LastUpdatedTimestamp, 
+                        IsDeleted 
+                    FROM Expenses 
+                    WHERE Id=@Id AND UserId=@UserId",
                     new { Id = e.ServerId.Value, UserId = userId }
                 );
 
@@ -29,9 +40,10 @@ public class ExpenseRepository
                 {
                     if (e.IsDeleted)
                     {
+                        var updatedAt = e.LastUpdatedTimestamp == default ? DateTime.UtcNow : e.LastUpdatedTimestamp;
                         await db.ExecuteAsync(
-                            "UPDATE Expenses SET IsDeleted=1, UpdatedAt=@UpdatedAt WHERE Id=@Id",
-                            new { UpdatedAt = e.LastUpdatedTimestamp, Id = e.ServerId.Value }
+                            "UPDATE Expenses SET IsDeleted=1, UpdatedAt=@UpdatedAt, [Timestamp]=DATEDIFF_BIG(MILLISECOND,'1970-01-01 00:00:00',GETUTCDATE()) WHERE Id=@Id",
+                            new { UpdatedAt = updatedAt, Id = e.ServerId.Value }
                         );
                         deletedIds.Add(e.ServerId.Value);
                     }
@@ -45,16 +57,17 @@ public class ExpenseRepository
                                 Note=@Note,
                                 ExpenseDate=@ExpenseDate,
                                 ImageBase64=@ImageBase64,
-                                UpdatedAt=@UpdatedAt
+                                UpdatedAt=@UpdatedAt,
+                                [Timestamp]=DATEDIFF_BIG(MILLISECOND,'1970-01-01 00:00:00',GETUTCDATE())
                             WHERE Id=@Id
                         ", new
                         {
-                            e.CategoryId,
-                            e.Amount,
-                            e.Description,
-                            e.ExpenseDate,
-                            e.ReceiptImageBase64,
-                            e.LastUpdatedTimestamp,
+                            CategoryId = e.CategoryId,
+                            Amount = e.Amount,
+                            Note = e.Description,
+                            ExpenseDate = e.ExpenseDate,
+                            ImageBase64 = e.ReceiptImageBase64,
+                            UpdatedAt = e.LastUpdatedTimestamp == default ? DateTime.UtcNow : e.LastUpdatedTimestamp,
                             Id = e.ServerId.Value
                         });
                     }
@@ -63,21 +76,23 @@ public class ExpenseRepository
             else
             {
                 // new record → insert
+                var updatedAt = e.LastUpdatedTimestamp == default ? DateTime.UtcNow : e.LastUpdatedTimestamp;
                 var newId = await db.ExecuteScalarAsync<int>(@"
-                    INSERT INTO Expenses (UserId, ClientId, CategoryId, Amount, Note, ExpenseDate, ImageBase64, CreatedAt, UpdatedAt, IsDeleted)
-                    VALUES (@UserId, @ClientId, @CategoryId, @Amount, @Note, @ExpenseDate, @ImageBase64, GETUTCDATE(), @UpdatedAt, @IsDeleted);
+                    INSERT INTO Expenses (UserId, ClientId, ClientExpenseId, CategoryId, Amount, Note, ExpenseDate, ImageBase64, CreatedAt, UpdatedAt, IsDeleted)
+                    VALUES (@UserId, @ClientId, @ClientExpenseId, @CategoryId, @Amount, @Note, @ExpenseDate, @ImageBase64, GETUTCDATE(), @UpdatedAt, @IsDeleted);
                     SELECT CAST(SCOPE_IDENTITY() as int);
                 ", new
                 {
                     UserId = userId,
-                    e.ClientExpenseId,
-                    e.CategoryId,
-                    e.Amount,
-                    e.Description,
-                    e.ExpenseDate,
-                    e.ReceiptImageBase64,
-                    e.LastUpdatedTimestamp,
-                    e.IsDeleted
+                    ClientId = e.ClientExpenseId,
+                    ClientExpenseId = e.ClientExpenseId,
+                    CategoryId = e.CategoryId,
+                    Amount = e.Amount,
+                    Note = e.Description,
+                    ExpenseDate = e.ExpenseDate,
+                    ImageBase64 = e.ReceiptImageBase64,
+                    UpdatedAt = updatedAt,
+                    IsDeleted = e.IsDeleted ? 1 : 0
                 });
 
                 e.ServerId = newId; // return serverId to Flutter
@@ -86,7 +101,16 @@ public class ExpenseRepository
 
         // fetch server updates since last sync
         var serverUpdates = await db.QueryAsync<ExpenseSyncDto>(@"
-            SELECT Id AS ServerId, ClientId, CategoryId, Amount, Note, ExpenseDate, ImageBase64, UpdatedAt, IsDeleted
+            SELECT 
+                Id AS ServerId, 
+                ISNULL(ClientExpenseId, ClientId) AS ClientExpenseId, 
+                CategoryId, 
+                Amount, 
+                Note AS Description, 
+                ExpenseDate, 
+                ImageBase64 AS ReceiptImageBase64, 
+                UpdatedAt AS LastUpdatedTimestamp, 
+                IsDeleted
             FROM Expenses
             WHERE UserId=@UserId AND UpdatedAt>@LastSyncTime
         ", new { UserId = userId, LastSyncTime = lastSyncTime });
@@ -97,18 +121,54 @@ public class ExpenseRepository
             Expenses = serverUpdates.ToList(),
             DeletedExpenseIds = deletedIds
         };
-
-
     }
 
     public async Task<int> AddExpenseAsync(ExpenseDto expense)
     {
         using var db = _dbFactory.CreateConnection();
         var newId = await db.ExecuteScalarAsync<int>(@"
-        INSERT INTO Expenses (UserId, CategoryId, Amount, Note, ExpenseDate, ImageBase64, CreatedAt, UpdatedAt, IsDeleted)
-        VALUES (@UserId, @CategoryId, @Amount, @Note, @ExpenseDate, @ImageBase64, GETUTCDATE(), GETUTCDATE(), 0);
-        SELECT CAST(SCOPE_IDENTITY() as int);
-    ", expense);
+            IF NOT EXISTS (SELECT 1 FROM Categories WHERE Id = @CategoryId)
+                SET @CategoryId = 1;
+
+            DECLARE @ExistingId INT;
+            IF (@Id > 0)
+            BEGIN
+                SELECT @ExistingId = Id FROM Expenses WHERE Id = @Id;
+            END
+
+            IF (@ExistingId IS NULL)
+            BEGIN
+                SELECT TOP 1 @ExistingId = Id 
+                FROM Expenses 
+                WHERE UserId = @UserId 
+                  AND Amount = @Amount 
+                  AND CategoryId = @CategoryId
+                  AND CAST(ExpenseDate AS DATE) = CAST(@ExpenseDate AS DATE)
+                  AND ISNULL(Note, '') = ISNULL(@Note, '')
+                  AND IsDeleted = 0;
+            END
+
+            IF (@ExistingId IS NOT NULL)
+            BEGIN
+                UPDATE Expenses 
+                SET CategoryId = @CategoryId, 
+                    Amount = @Amount, 
+                    Note = @Note, 
+                    ExpenseDate = @ExpenseDate, 
+                    ImageBase64 = COALESCE(@ImageBase64, ImageBase64), 
+                    UpdatedAt = GETUTCDATE(),
+                    [Timestamp] = DATEDIFF_BIG(MILLISECOND, '1970-01-01 00:00:00', GETUTCDATE())
+                WHERE Id = @ExistingId;
+                SELECT @ExistingId;
+            END
+            ELSE
+            BEGIN
+                INSERT INTO Expenses (UserId, CategoryId, Amount, Note, ExpenseDate, ImageBase64, CreatedAt, UpdatedAt, IsDeleted, [Timestamp])
+                VALUES (@UserId, @CategoryId, @Amount, @Note, @ExpenseDate, @ImageBase64, GETUTCDATE(), GETUTCDATE(), 0,
+                        DATEDIFF_BIG(MILLISECOND, '1970-01-01 00:00:00', GETUTCDATE()));
+                SELECT CAST(SCOPE_IDENTITY() as int);
+            END
+        ", expense);
         return newId;
     }
 
@@ -129,7 +189,8 @@ public class ExpenseRepository
             Note=@Note,
             ExpenseDate=@ExpenseDate,
             ImageBase64=@ImageBase64,
-            UpdatedAt=GETUTCDATE()
+            UpdatedAt=GETUTCDATE(),
+            [Timestamp]=DATEDIFF_BIG(MILLISECOND, '1970-01-01 00:00:00', GETUTCDATE())
         WHERE Id=@Id AND IsDeleted=0
     ", expense);
         return rows > 0;
@@ -146,12 +207,45 @@ public class ExpenseRepository
     public async Task<IEnumerable<ExpenseDto>> GetExpensesByUserAsync(int userId)
     {
         using var db = _dbFactory.CreateConnection();
-        var expenses = await db.QueryAsync<ExpenseDto>(
-            "SELECT * FROM Expenses WHERE UserId=@UserId AND IsDeleted=0 ORDER BY ExpenseDate DESC",
+        var expenses = await db.QueryAsync<ExpenseDto>(@"
+            SELECT 
+                e.Id,
+                e.UserId,
+                e.CategoryId,
+                e.Amount,
+                e.Note,
+                e.ExpenseDate,
+                e.ImageBase64,
+                ISNULL(e.ClientExpenseId, e.ClientId) AS ClientExpenseId,
+                c.Name AS CategoryName
+            FROM Expenses e
+            LEFT JOIN Categories c ON e.CategoryId = c.Id
+            WHERE e.UserId=@UserId AND e.IsDeleted=0 
+            ORDER BY e.ExpenseDate DESC",
             new { UserId = userId }
         );
         return expenses;
     }
 
-
+    public async Task<IEnumerable<ExpenseDto>> GetAllExpensesAsync()
+    {
+        using var db = _dbFactory.CreateConnection();
+        var expenses = await db.QueryAsync<ExpenseDto>(@"
+            SELECT 
+                e.Id,
+                e.UserId,
+                e.CategoryId,
+                e.Amount,
+                e.Note,
+                e.ExpenseDate,
+                e.ImageBase64,
+                ISNULL(e.ClientExpenseId, e.ClientId) AS ClientExpenseId,
+                c.Name AS CategoryName
+            FROM Expenses e
+            LEFT JOIN Categories c ON e.CategoryId = c.Id
+            WHERE e.IsDeleted=0 
+            ORDER BY e.ExpenseDate DESC"
+        );
+        return expenses;
+    }
 }

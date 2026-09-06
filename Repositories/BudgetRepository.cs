@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 
 public class BudgetRepository
 {
@@ -14,7 +14,7 @@ public class BudgetRepository
         using var db = _dbFactory.CreateConnection();
 
         var budget = await db.QueryFirstOrDefaultAsync<BudgetDto>(
-            "SELECT MonthlyLimit, DailyLimit FROM Budgets WHERE UserId=@UserId",
+            "SELECT MonthlyBudget AS MonthlyLimit, DailyLimit FROM Budgets WHERE UserId=@UserId",
             new { UserId = userId }
         );
 

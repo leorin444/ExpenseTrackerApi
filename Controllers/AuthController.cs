@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using ExpenseTracker.API.Repositories;
 using ExpenseTracker.API.Services;
 using ExpenseTracker.API.Models;
@@ -50,16 +50,10 @@ namespace ExpenseTracker.API.Controllers
         [HttpPost("refresh")]
         public async Task<IActionResult> Refresh([FromBody] RefreshRequest request)
         {
-            // Extract userId from claims in the expired access token (optional improvement)
-            var userIdClaim = User.FindFirst("sub")?.Value;
-            if (string.IsNullOrEmpty(userIdClaim)) return Unauthorized("Missing user claim");
+            var userId = await _authRepo.GetUserIdByRefreshToken(request.RefreshToken);
+            if (!userId.HasValue) return Unauthorized("Invalid or expired refresh token");
 
-            var userId = int.Parse(userIdClaim);
-
-            var valid = await _authRepo.ValidateRefreshToken(userId, request.RefreshToken);
-            if (!valid) return Unauthorized("Invalid refresh token");
-
-            var user = new User { Id = userId, Email = User.FindFirst("email")?.Value, Role = "User" };
+            var user = new User { Id = userId.Value, Email = string.Empty, Role = "User" };
             var newAccessToken = _tokenService.GenerateJwtToken(user);
 
             return Ok(new { accessToken = newAccessToken, expiresIn = 900 });
@@ -99,6 +93,13 @@ namespace ExpenseTracker.API.Controllers
             // Move DB insert into UserRepository instead of using _dbFactory directly
             var userId = await _userRepo.CreateUser(request.Email, hashedPassword, request.FirebaseUid);
 
+            return Ok(new { userId });
+        }
+
+        [HttpPost("login-sync")]
+        public async Task<IActionResult> LoginSync([FromBody] RegisterRequest request)
+        {
+            var userId = await _userRepo.GetOrCreateUser(request.FirebaseUid, request.Email);
             return Ok(new { userId });
         }
 

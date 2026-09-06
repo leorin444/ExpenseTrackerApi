@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 
 using ExpenseTracker.API.Models;
 
@@ -53,11 +53,28 @@ public class UserRepository
     public async Task<int> CreateUser(string email, string passwordHash, string firebaseUid)
     {
         using var db = _dbFactory.CreateConnection();
+        var existingUser = await db.QueryFirstOrDefaultAsync<User>(
+            "SELECT Id, Email, PasswordHash, FirebaseUid, LastLogin FROM Users WHERE (Email = @Email AND @Email <> '') OR (FirebaseUid = @FirebaseUid AND @FirebaseUid <> '')",
+            new { Email = email, FirebaseUid = firebaseUid }
+        );
+
+        if (existingUser != null)
+        {
+            await db.ExecuteAsync(@"
+                UPDATE Users 
+                SET FirebaseUid = COALESCE(NULLIF(@FirebaseUid, ''), FirebaseUid),
+                    PasswordHash = COALESCE(NULLIF(@PasswordHash, ''), PasswordHash),
+                    LastLogin = GETUTCDATE()
+                WHERE Id = @Id
+            ", new { FirebaseUid = firebaseUid, PasswordHash = passwordHash, Id = existingUser.Id });
+            return existingUser.Id;
+        }
+
         var userId = await db.ExecuteScalarAsync<int>(@"
-        INSERT INTO Users (Email, PasswordHash, FirebaseUid, LastLogin)
-        VALUES (@Email, @PasswordHash, @FirebaseUid, GETUTCDATE());
-        SELECT CAST(SCOPE_IDENTITY() as int);
-    ", new { Email = email, PasswordHash = passwordHash, FirebaseUid = firebaseUid });
+            INSERT INTO Users (Email, PasswordHash, FirebaseUid, LastLogin)
+            VALUES (@Email, @PasswordHash, @FirebaseUid, GETUTCDATE());
+            SELECT CAST(SCOPE_IDENTITY() as int);
+        ", new { Email = email, PasswordHash = passwordHash, FirebaseUid = firebaseUid });
 
         return userId;
     }

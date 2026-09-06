@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 
 public static class PasswordHasher
@@ -26,6 +26,13 @@ public static class PasswordHasher
 
     public static bool VerifyPassword(string password, string storedHash)
     {
+        if (storedHash.StartsWith("AQAAAA"))
+        {
+            var hasher = new Microsoft.AspNetCore.Identity.PasswordHasher<object>();
+            var result = hasher.VerifyHashedPassword(null, storedHash, password);
+            return result != Microsoft.AspNetCore.Identity.PasswordVerificationResult.Failed;
+        }
+
         var parts = storedHash.Split('.');
         if (parts.Length != 2) return false;
 

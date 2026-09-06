@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 
 [ApiController]
 [Route("api/reports")]
@@ -17,87 +17,78 @@ public class ReportController : ControllerBase
 
 
     // MONTHLY REPORT
-    // GET /api/reports/monthly?year=2026
+    // GET /api/reports/monthly?year=2026&userId=1
     [HttpGet("monthly")]
-    public async Task<IActionResult> GetMonthlyReport(int year)
+    public async Task<IActionResult> GetMonthlyReport([FromQuery] int year, [FromQuery] int? userId = null)
     {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        var uid = await ResolveUserId(userId);
+        if (!uid.HasValue) return Unauthorized("Authentication required.");
 
-        if (firebaseUid == null)
-            return Unauthorized();
-
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
-
-        var result = await _repo.GetMonthlyReport(userId, year);
-
+        var result = await _repo.GetMonthlyReport(uid.Value, year);
         return Ok(result);
     }
 
     // CATEGORY REPORT
-    // GET /api/reports/category?month=6&year=2026
+    // GET /api/reports/category?month=6&year=2026&userId=1
     [HttpGet("category")]
-    public async Task<IActionResult> GetCategoryReport(int month, int year)
+    public async Task<IActionResult> GetCategoryReport([FromQuery] int month, [FromQuery] int year, [FromQuery] int? userId = null)
     {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        var uid = await ResolveUserId(userId);
+        if (!uid.HasValue) return Unauthorized("Authentication required.");
 
-        if (firebaseUid == null)
-            return Unauthorized();
-
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
-
-        var result = await _repo.GetCategoryReport(userId, month, year);
-
+        var result = await _repo.GetCategoryReport(uid.Value, month, year);
         return Ok(result);
     }
 
     // DAILY REPORT
-    // GET /api/reports/daily?month=6&year=2026
+    // GET /api/reports/daily?month=6&year=2026&userId=1
     [HttpGet("daily")]
-    public async Task<IActionResult> GetDailyReport(int month, int year)
+    public async Task<IActionResult> GetDailyReport([FromQuery] int month, [FromQuery] int year, [FromQuery] int? userId = null)
     {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        var uid = await ResolveUserId(userId);
+        if (!uid.HasValue) return Unauthorized("Authentication required.");
 
-        if (firebaseUid == null)
-            return Unauthorized();
-
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
-
-        var result = await _repo.GetDailyReport(userId, month, year);
-
+        var result = await _repo.GetDailyReport(uid.Value, month, year);
         return Ok(result);
     }
 
     // BUDGET REPORT
-    // GET /api/reports/budget?month=6&year=2026
+    // GET /api/reports/budget?month=6&year=2026&userId=1
     [HttpGet("budget")]
-    public async Task<IActionResult> GetBudgetReport(int month, int year)
+    public async Task<IActionResult> GetBudgetReport([FromQuery] int month, [FromQuery] int year, [FromQuery] int? userId = null)
     {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        var uid = await ResolveUserId(userId);
+        if (!uid.HasValue) return Unauthorized("Authentication required.");
 
-        if (firebaseUid == null)
-            return Unauthorized();
-
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
-
-        var result = await _repo.GetBudgetReport(userId, month, year);
-
+        var result = await _repo.GetBudgetReport(uid.Value, month, year);
         return Ok(result);
     }
 
     // YEAR SUMMARY
-    // GET /api/reports/year?year=2026
+    // GET /api/reports/year?year=2026&userId=1
     [HttpGet("year")]
-    public async Task<IActionResult> GetYearReport(int year)
+    public async Task<IActionResult> GetYearReport([FromQuery] int year, [FromQuery] int? userId = null)
     {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        var uid = await ResolveUserId(userId);
+        if (!uid.HasValue) return Unauthorized("Authentication required.");
 
-        if (firebaseUid == null)
-            return Unauthorized();
-
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
-
-        var result = await _repo.GetYearReport(userId, year);
-
+        var result = await _repo.GetYearReport(uid.Value, year);
         return Ok(result);
+    }
+
+    private async Task<int?> ResolveUserId(int? userId)
+    {
+        if (userId.HasValue && userId.Value > 0)
+        {
+            return userId.Value;
+        }
+
+        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+        if (!string.IsNullOrEmpty(firebaseUid))
+        {
+            return await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
+        }
+
+        return null;
     }
 }

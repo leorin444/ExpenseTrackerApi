@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 
 public class CategoryRepository
 {
@@ -14,7 +14,7 @@ public class CategoryRepository
         using var db = _dbFactory.CreateConnection();
 
         var categories = await db.QueryAsync<CategoryDto>(
-            "SELECT Id, Name, Icon FROM Categories"
+            "SELECT Id, Name, Icon, Color, Timestamp FROM Categories WHERE ISNULL(IsDeleted, 0) = 0 ORDER BY Name"
         );
 
         return categories.ToList();

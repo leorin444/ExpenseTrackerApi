@@ -1,28 +1,31 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 
-[ApiController]
-[Route("api/sync")]
-public class BudgetController : ControllerBase
+namespace ExpenseTracker.API.Controllers
 {
-    private readonly BudgetRepository _repo;
-    private readonly UserRepository _userRepo;
-
-    public BudgetController(BudgetRepository repo, UserRepository userRepo)
+    [ApiController]
+    public class BudgetController : ControllerBase
     {
-        _repo = repo;
-        _userRepo = userRepo;
-    }
+        private readonly BudgetRepository _repo;
+        private readonly UserRepository _userRepo;
 
-    [HttpGet("budgets")]
-    public async Task<IActionResult> GetBudget()
-    {
-        var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
-        if (firebaseUid == null)
-            return Unauthorized();
+        public BudgetController(BudgetRepository repo, UserRepository userRepo)
+        {
+            _repo = repo;
+            _userRepo = userRepo;
+        }
 
-        var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
+        [HttpGet("api/sync/budgets")]
+        [HttpGet("api/budgets")]
+        public async Task<IActionResult> GetBudget()
+        {
+            var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
+            if (string.IsNullOrEmpty(firebaseUid))
+                return Unauthorized("Missing or invalid user authentication.");
 
-        var budget = await _repo.GetUserBudget(userId);
-        return Ok(budget);
+            var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");
+
+            var budget = await _repo.GetUserBudget(userId);
+            return Ok(budget);
+        }
     }
 }

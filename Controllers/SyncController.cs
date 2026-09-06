@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 
 [ApiController]
 [Route("api/sync")]
@@ -17,8 +17,8 @@ public class SyncController : ControllerBase
     public async Task<IActionResult> SyncExpenses([FromBody] SyncExpenseRequestDto request)
     {
         var firebaseUid = HttpContext.Items["FirebaseUid"]?.ToString();
-        if (firebaseUid == null)
-            return Unauthorized();
+        if (string.IsNullOrEmpty(firebaseUid))
+            return Unauthorized("Missing or invalid user authentication.");
 
         // email optional, can come from Flutter if needed
         var userId = await _userRepo.GetOrCreateUser(firebaseUid, "user@example.com");

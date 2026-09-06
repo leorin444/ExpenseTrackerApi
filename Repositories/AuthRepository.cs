@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 namespace ExpenseTracker.API.Repositories
 {
     public class AuthRepository
@@ -26,6 +26,15 @@ namespace ExpenseTracker.API.Repositories
                 WHERE UserId = @UserId AND Token = @Token AND ExpiresAt > GETUTCDATE()
             ", new { UserId = userId, Token = refreshToken });
             return token != null;
+        }
+
+        public async Task<int?> GetUserIdByRefreshToken(string refreshToken)
+        {
+            using var db = _dbFactory.CreateConnection();
+            return await db.QueryFirstOrDefaultAsync<int?>(@"
+                SELECT UserId FROM RefreshTokens
+                WHERE Token = @Token AND ExpiresAt > GETUTCDATE()
+            ", new { Token = refreshToken });
         }
 
         public async Task SaveResetToken(string email, string resetToken)

@@ -1,78 +1,118 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using ExpenseTracker.API.Repositories;
+using Microsoft.AspNetCore.Mvc;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using ExpenseTracker.API.DTOs;
-using Microsoft.AspNetCore.Authorization;
-
 
 namespace ExpenseTracker.API.Controllers
 {
     [ApiController]
-    [Authorize]
-    [Route("api/[controller]")]
+    [Route("api/expenses")]
     public class ExpensesController : ControllerBase
     {
-        private readonly ExpenseRepository _repository;
+        private readonly ExpenseRepository _expenseRepo;
+        private readonly UserRepository _userRepo;
 
-        public ExpensesController(ExpenseRepository repository)
+        public ExpensesController(ExpenseRepository expenseRepo, UserRepository userRepo)
         {
-            _repository = repository;
+            _expenseRepo = expenseRepo;
+            _userRepo = userRepo;
         }
 
-        // POST /api/expenses
-        [HttpPost]
-        public async Task<IActionResult> CreateExpense([FromBody] ExpenseDto expense)
+        [HttpGet]
+        public async Task<IActionResult> GetExpenses([FromQuery] int? userId, [FromQuery] string? firebaseUid)
         {
-            var id = await _repository.AddExpenseAsync(expense);
-            return Ok(new { message = "Expense added successfully", expenseId = id });
+            if (userId.HasValue && userId.Value > 0)
+            {
+                var expenses = await _expenseRepo.GetExpensesByUserAsync(userId.Value);
+                return Ok(expenses);
+            }
+
+            if (!string.IsNullOrWhiteSpace(firebaseUid))
+            {
+                var user = await _userRepo.GetByFirebaseUidAsync(firebaseUid);
+                if (user != null)
+                {
+                    var expenses = await _expenseRepo.GetExpensesByUserAsync(user.Id);
+                    return Ok(expenses);
+                }
+                // firebaseUid provided but user not found in DB → return empty (never leak other users' data)
+                return Ok(new List<object>());
+            }
+
+            // No identifier provided → return empty list for safety (never expose all users' data)
+            return Ok(new List<object>());
         }
 
-        // GET /api/expenses/{id}
         [HttpGet("{id}")]
         public async Task<IActionResult> GetExpenseById(int id)
         {
-            var expense = await _repository.GetExpenseByIdAsync(id);
+            if (id <= 0) return BadRequest("Valid id is required.");
+            var expense = await _expenseRepo.GetExpenseByIdAsync(id);
             if (expense == null) return NotFound();
             return Ok(expense);
         }
 
-        // PUT /api/expenses/{id}
+        [HttpPost]
+        public async Task<IActionResult> CreateExpense([FromBody] ExpenseDto expense, [FromQuery] string? firebaseUid)
+        {
+            // Resolve userId from FirebaseUid — check body field first, then query param
+            if (expense.UserId <= 0)
+            {
+                var uid = !string.IsNullOrWhiteSpace(expense.FirebaseUid)
+                    ? expense.FirebaseUid
+                    : firebaseUid;
+
+                if (!string.IsNullOrWhiteSpace(uid))
+                {
+                    var user = await _userRepo.GetByFirebaseUidAsync(uid);
+                    if (user != null)
+                    {
+                        expense.UserId = user.Id;
+                    }
+                    else
+                    {
+                        expense.UserId = await _userRepo.GetOrCreateUser(uid, $"{uid}@expense-tracker.com");
+                    }
+                }
+            }
+
+            if (expense.UserId <= 0)
+            {
+                expense.UserId = 1; // Fallback default user
+            }
+
+            if (expense.CategoryId <= 0)
+            {
+                expense.CategoryId = 1; // Fallback default category (Food)
+            }
+
+            if (expense.ExpenseDate == default)
+            {
+                expense.ExpenseDate = System.DateTime.UtcNow;
+            }
+
+            var newId = await _expenseRepo.AddExpenseAsync(expense);
+            expense.Id = newId;
+            return StatusCode(201, expense);
+        }
+
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateExpense(int id, [FromBody] ExpenseDto expense)
         {
-            if (id != expense.Id) return BadRequest(new { message = "Expense ID mismatch" });
-
-            var updated = await _repository.UpdateExpenseAsync(expense);
-            if (!updated) return NotFound(new { message = "Expense not found" });
-
-            return Ok(new { message = "Expense updated successfully" });
+            if (id <= 0) return BadRequest("Valid id is required.");
+            expense.Id = id;
+            var success = await _expenseRepo.UpdateExpenseAsync(expense);
+            if (!success) return NotFound();
+            return Ok(expense);
         }
 
-        // DELETE /api/expenses/{id}
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteExpense(int id)
         {
-            var deleted = await _repository.DeleteExpenseAsync(id);
-            if (!deleted) return NotFound(new { message = "Expense not found" });
-
-            return Ok(new { message = "Expense deleted successfully" });
+            if (id <= 0) return BadRequest("Valid id is required.");
+            var success = await _expenseRepo.DeleteExpenseAsync(id);
+            if (!success) return NotFound();
+            return Ok(new { message = "Expense deleted successfully." });
         }
-
-
-        // GET /api/expenses → List all expenses for logged-in user
-        [HttpGet]
-        public async Task<IActionResult> GetExpensesForUser()
-        {
-            var userIdClaim = User.FindFirst("userId")?.Value;
-            if (string.IsNullOrEmpty(userIdClaim))
-                return Unauthorized(new { message = "Unauthorized" });
-
-            int userId = int.Parse(userIdClaim);
-            var expenses = await _repository.GetExpensesByUserAsync(userId);
-
-            return Ok(new { message = "Expenses retrieved successfully", data = expenses });
-        }
-
-
-
     }
 }

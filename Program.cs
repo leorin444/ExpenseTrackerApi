@@ -1,114 +1,105 @@
-﻿using Microsoft.IdentityModel.Tokens;
-using Microsoft.AspNetCore.Authentication.JwtBearer;   
-using Microsoft.OpenApi.Models;                        
-using System.Text;
+using Microsoft.OpenApi.Models;
+using ExpenseTracker.API.Middleware;
 using ExpenseTracker.API.Repositories;
 using ExpenseTracker.API.Services;
-using ExpenseTracker.API.Models;
-
-
-
-
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services
+// Enable CORS for Flutter app and Web clients
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+// Configure Forwarded Headers for Cloudflare Tunnel / Reverse Proxy
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-
-// Database + repositories
-builder.Services.AddSingleton<DbConnectionFactory>();
-builder.Services.AddScoped<CategoryRepository>();
-builder.Services.AddScoped<SyncRepository>();
-builder.Services.AddScoped<UserRepository>();
-builder.Services.AddScoped<ExpenseRepository>();
-builder.Services.AddScoped<BudgetRepository>();
-builder.Services.AddScoped<ReportRepository>();
-
-// Token + Auth
-builder.Services.AddScoped<TokenService>();
-builder.Services.AddScoped<AuthRepository>();
-
-// JWT authentication
-builder.Services.AddAuthentication("Bearer")
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "default_secret_key_here")
-            )
-        };
-    });
-
-// Swagger config
 builder.Services.AddSwaggerGen(c =>
 {
-    c.EnableAnnotations();
-
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "ExpenseTracker API",
-        Version = "v1",
-        Description = "API for Android Expense Tracker app"
-    });
-
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "ExpenseTracker API", Version = "v1" });
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",
-        Type = SecuritySchemeType.ApiKey,
+        Type = SecuritySchemeType.Http,
         Scheme = "Bearer",
         BearerFormat = "JWT",
         In = ParameterLocation.Header,
         Description = "Enter 'Bearer {token}'"
     });
-
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
             new OpenApiSecurityScheme
             {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
             },
             new string[] {}
         }
     });
+    c.OperationFilter<ExpenseTracker.API.Helpers.AuthResponsesOperationFilter>();
 });
 
-builder.Services.AddAuthorization();
+builder.Services.AddSingleton<DbConnectionFactory>();
+builder.Services.AddSingleton<DbInitializer>();
+builder.Services.AddSingleton<TokenService>(); // Register TokenService
+
+// Repositories
+builder.Services.AddScoped<UserRepository>();
+builder.Services.AddScoped<AuthRepository>();
+builder.Services.AddScoped<BudgetRepository>();
+builder.Services.AddScoped<CategoryRepository>();
+builder.Services.AddScoped<ExpenseRepository>();
+builder.Services.AddScoped<ReportRepository>();
+builder.Services.AddScoped<SyncRepository>();
 
 var app = builder.Build();
 
-// Swagger
+app.UseForwardedHeaders();
 
-    // Swagger
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "ExpenseTracker API v1");
-        c.RoutePrefix = "swagger"; // ensures /swagger/index.html works
-    });
+// Initialize the database tables if they don't exist
+using (var scope = app.Services.CreateScope())
+{
+    var initializer = scope.ServiceProvider.GetRequiredService<DbInitializer>();
+    try {
+        initializer.Initialize();
+    } catch (System.Exception ex) {
+        System.Console.WriteLine("Could not initialize DB: " + ex.Message);
+    }
+}
 
+// Enable Swagger UI for all environments (including production and tunnels)
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "ExpenseTracker API v1");
+    c.RoutePrefix = "swagger"; 
+});
 
+app.UseCors("AllowAll");
 
-// Middleware
-//app.UseMiddleware<FirebaseAuthMiddleware>();
+app.UseMiddleware<FirebaseAuthMiddleware>();
 
-app.UseHttpsRedirection();
-app.UseAuthentication();
 app.UseAuthorization();
+
+// Health check endpoints for Flutter app and uptime monitors
+app.MapGet("/", () => Results.Ok(new { status = "healthy", message = "ExpenseTracker API is running" }));
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapGet("/api/health", () => Results.Ok(new { status = "healthy" }));
 
 app.MapControllers();
 
 app.Run();
+
