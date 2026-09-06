@@ -133,8 +133,8 @@ namespace ExpenseTracker.API.Controllers
 
     public class RegisterRequest
     {
-        public string Email { get; set; }
-        public string Password { get; set; }
-        public string FirebaseUid { get; set; }
+        public string Email { get; set; } = string.Empty;
+        public string? Password { get; set; }
+        public string FirebaseUid { get; set; } = string.Empty;
     }
 }
